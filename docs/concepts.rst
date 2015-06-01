@@ -10,47 +10,40 @@ The things outlined here are the underlying concepts of the nanopb design.
 
 Proto files
 ===========
-All Protocol Buffers implementations use .proto files to describe the message format.
-The point of these files is to be a portable interface description language.
+All Protocol Buffers implementations use .proto files to describe the message
+format. The point of these files is to be a portable interface description
+language.
 
 Compiling .proto files for nanopb
 ---------------------------------
-Nanopb uses the Google's protoc compiler to parse the .proto file, and then a python script to generate the C header and source code from it::
+Nanopb uses the Google's protoc compiler to parse the .proto file, and then a
+python script to generate the C header and source code from it::
 
     user@host:~$ protoc -omessage.pb message.proto
     user@host:~$ python ../generator/nanopb_generator.py message.pb
     Writing to message.h and message.c
     user@host:~$
 
-Compiling .proto files with nanopb options
-------------------------------------------
-Nanopb defines two extensions for message fields described in .proto files: *max_size* and *max_count*.
-These are the maximum size of a string and maximum count of items in an array::
+Modifying generator behaviour
+-----------------------------
+Using generator options, you can set maximum sizes for fields in order to
+allocate them statically. The preferred way to do this is to create an .options
+file with the same name as your .proto file::
 
-    required string name = 1 [(nanopb).max_size = 40];
-    repeated PhoneNumber phone = 4 [(nanopb).max_count = 5];
+   # Foo.proto
+   message Foo {
+      required string name = 1;
+   }
 
-To use these extensions, you need to place an import statement in the beginning of the file::
+::
 
-    import "nanopb.proto";
+   # Foo.options
+   Foo.name max_size:16
 
-This file, in turn, requires the file *google/protobuf/descriptor.proto*. This is usually installed under */usr/include*. Therefore, to compile a .proto file which uses options, use a protoc command similar to::
+For more information on this, see the `Proto file options`_ section in the
+reference manual.
 
-    protoc -I/usr/include -Inanopb/generator -I. -omessage.pb message.proto
-
-The options can be defined in file, message and field scopes::
-
-    option (nanopb_fileopt).max_size = 20; // File scope
-    message Message
-    {
-        option (nanopb_msgopt).max_size = 30; // Message scope
-        required string fieldsize = 1 [(nanopb).max_size = 40]; // Field scope
-    }
-
-It is also possible to give the options on command line, but then they will affect the whole file. For example::
-
-    user@host:~$ python ../generator/nanopb_generator.py -s 'max_size: 20' message.pb
-
+.. _`Proto file options`: reference.html#proto-file-options
 
 Streams
 =======
@@ -262,6 +255,69 @@ generates this field description array for the structure *Person_PhoneNumber*::
     PB_LAST_FIELD
  };
 
+
+Extension fields
+================
+Protocol Buffers supports a concept of `extension fields`_, which are
+additional fields to a message, but defined outside the actual message.
+The definition can even be in a completely separate .proto file.
+
+The base message is declared as extensible by keyword *extensions* in
+the .proto file::
+
+ message MyMessage {
+     .. fields ..
+     extensions 100 to 199;
+ }
+
+For each extensible message, *nanopb_generator.py* declares an additional
+callback field called *extensions*. The field and associated datatype
+*pb_extension_t* forms a linked list of handlers. When an unknown field is
+encountered, the decoder calls each handler in turn until either one of them
+handles the field, or the list is exhausted.
+
+The actual extensions are declared using the *extend* keyword in the .proto,
+and are in the global namespace::
+
+ extend MyMessage {
+     optional int32 myextension = 100;
+ }
+
+For each extension, *nanopb_generator.py* creates a constant of type
+*pb_extension_type_t*. To link together the base message and the extension,
+you have to:
+
+1. Allocate storage for your field, matching the datatype in the .proto.
+   For example, for a *int32* field, you need a *int32_t* variable to store
+   the value.
+2. Create a *pb_extension_t* constant, with pointers to your variable and
+   to the generated *pb_extension_type_t*.
+3. Set the *message.extensions* pointer to point to the *pb_extension_t*.
+
+An example of this is available in *tests/test_encode_extensions.c* and
+*tests/test_decode_extensions.c*.
+
+.. _`extension fields`: https://developers.google.com/protocol-buffers/docs/proto#extensions
+
+Message framing
+===============
+Protocol Buffers does not specify a method of framing the messages for transmission.
+This is something that must be provided by the library user, as there is no one-size-fits-all
+solution. Typical needs for a framing format are to:
+
+1. Encode the message length.
+2. Encode the message type.
+3. Perform any synchronization and error checking that may be needed depending on application.
+
+For example UDP packets already fullfill all the requirements, and TCP streams typically only
+need a way to identify the message length and type. Lower level interfaces such as serial ports
+may need a more robust frame format, such as HDLC (high-level data link control).
+
+Nanopb provides a few helpers to facilitate implementing framing formats:
+
+1. Functions *pb_encode_delimited* and *pb_decode_delimited* prefix the message data with a varint-encoded length.
+2. Union messages and oneofs are supported in order to implement top-level container messages.
+3. Message IDs can be specified using the *(nanopb_msgopt).msgid* option and can then be accessed from the header.
 
 Return values and error handling
 ================================

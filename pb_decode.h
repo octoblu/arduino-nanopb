@@ -1,13 +1,10 @@
-#ifndef _PB_DECODE_H_
-#define _PB_DECODE_H_
-
 /* pb_decode.h: Functions to decode protocol buffers. Depends on pb_decode.c.
- * The main function is pb_decode. You will also need to create an input
- * stream, which is easiest to do with pb_istream_from_buffer().
- * 
- * You also need structures and their corresponding pb_field_t descriptions.
- * These are usually generated from .proto-files with a script.
+ * The main function is pb_decode. You also need an input stream, and the
+ * field descriptions created by nanopb_generator.py.
  */
+
+#ifndef PB_DECODE_H_INCLUDED
+#define PB_DECODE_H_INCLUDED
 
 #include "pb.h"
 
@@ -15,21 +12,20 @@
 extern "C" {
 #endif
 
-/* Lightweight input stream.
- * You can provide a callback function for reading or use
- * pb_istream_from_buffer.
+/* Structure for defining custom input streams. You will need to provide
+ * a callback function to read the bytes from your storage, which can be
+ * for example a file or a network socket.
  * 
- * Rules for callback:
+ * The callback must conform to these rules:
+ *
  * 1) Return false on IO errors. This will cause decoding to abort.
- * 
  * 2) You can use state to store your own data (e.g. buffer pointer),
- * and rely on pb_read to verify that no-body reads past bytes_left.
- * 
+ *    and rely on pb_read to verify that no-body reads past bytes_left.
  * 3) Your callback may be used with substreams, in which case bytes_left
- * is different than from the main stream. Don't use bytes_left to compute
- * any pointers.
+ *    is different than from the main stream. Don't use bytes_left to compute
+ *    any pointers.
  */
-struct _pb_istream_t
+struct pb_istream_s
 {
 #ifdef PB_BUFFER_ONLY
     /* Callback pointer is not used in buffer-only configuration.
@@ -49,36 +45,75 @@ struct _pb_istream_t
 #endif
 };
 
-pb_istream_t pb_istream_from_buffer(uint8_t *buf, size_t bufsize);
-bool pb_read(pb_istream_t *stream, uint8_t *buf, size_t count);
-
-/* Decode from stream to destination struct.
+/***************************
+ * Main decoding functions *
+ ***************************/
+ 
+/* Decode a single protocol buffers message from input stream into a C structure.
  * Returns true on success, false on any failure.
  * The actual struct pointed to by dest must match the description in fields.
+ * Callback fields of the destination structure must be initialized by caller.
+ * All other fields will be initialized by this function.
+ *
+ * Example usage:
+ *    MyMessage msg = {};
+ *    uint8_t buffer[64];
+ *    pb_istream_t stream;
+ *    
+ *    // ... read some data into buffer ...
+ *
+ *    stream = pb_istream_from_buffer(buffer, count);
+ *    pb_decode(&stream, MyMessage_fields, &msg);
  */
 bool pb_decode(pb_istream_t *stream, const pb_field_t fields[], void *dest_struct);
 
 /* Same as pb_decode, except does not initialize the destination structure
  * to default values. This is slightly faster if you need no default values
  * and just do memset(struct, 0, sizeof(struct)) yourself.
+ *
+ * This can also be used for 'merging' two messages, i.e. update only the
+ * fields that exist in the new message.
+ *
+ * Note: If this function returns with an error, it will not release any
+ * dynamically allocated fields. You will need to call pb_release() yourself.
  */
 bool pb_decode_noinit(pb_istream_t *stream, const pb_field_t fields[], void *dest_struct);
 
-/* Decode a delimited message from stream to destination struct.
- * Returns true on success, false on any failure.
- * The actual struct pointed to by dest must match the description in fields.
+/* Same as pb_decode, except expects the stream to start with the message size
+ * encoded as varint. Corresponds to parseDelimitedFrom() in Google's
+ * protobuf API.
  */
-bool pb_delim_decode(pb_istream_t *stream, const pb_field_t fields[], void *dest_struct);
+bool pb_decode_delimited(pb_istream_t *stream, const pb_field_t fields[], void *dest_struct);
 
-/* Same as pb_delim_decode, except does not initialize the destination structure
- * to default values. This is slightly faster if you need no default values
- * and just do memset(struct, 0, sizeof(struct)) yourself.
+#ifdef PB_ENABLE_MALLOC
+/* Release any allocated pointer fields. If you use dynamic allocation, you should
+ * call this for any successfully decoded message when you are done with it. If
+ * pb_decode() returns with an error, the message is already released.
  */
-bool pb_delim_decode_noinit(pb_istream_t *stream, const pb_field_t fields[], void *dest_struct);
+void pb_release(const pb_field_t fields[], void *dest_struct);
+#endif
 
-/* --- Helper functions ---
- * You may want to use these from your caller or callbacks.
+
+/**************************************
+ * Functions for manipulating streams *
+ **************************************/
+
+/* Create an input stream for reading from a memory buffer.
+ *
+ * Alternatively, you can use a custom stream that reads directly from e.g.
+ * a file or a network socket.
  */
+pb_istream_t pb_istream_from_buffer(uint8_t *buf, size_t bufsize);
+
+/* Function to read from a pb_istream_t. You can use this if you need to
+ * read some custom header data, or to read data in field callbacks.
+ */
+bool pb_read(pb_istream_t *stream, uint8_t *buf, size_t count);
+
+
+/************************************************
+ * Helper functions for writing field callbacks *
+ ************************************************/
 
 /* Decode the tag for the next field in the stream. Gives the wire type and
  * field tag. At end of the message, returns false and sets eof to true. */
@@ -106,25 +141,6 @@ bool pb_decode_fixed64(pb_istream_t *stream, void *dest);
 /* Make a limited-length substream for reading a PB_WT_STRING field. */
 bool pb_make_string_substream(pb_istream_t *stream, pb_istream_t *substream);
 void pb_close_string_substream(pb_istream_t *stream, pb_istream_t *substream);
-
-/* --- Internal functions ---
- * These functions are not terribly useful for the average library user, but
- * are exported to make the unit testing and extending nanopb easier.
- */
-
-#ifdef NANOPB_INTERNALS
-bool pb_dec_varint(pb_istream_t *stream, const pb_field_t *field, void *dest);
-bool pb_dec_svarint(pb_istream_t *stream, const pb_field_t *field, void *dest);
-bool pb_dec_fixed32(pb_istream_t *stream, const pb_field_t *field, void *dest);
-bool pb_dec_fixed64(pb_istream_t *stream, const pb_field_t *field, void *dest);
-
-bool pb_dec_bytes(pb_istream_t *stream, const pb_field_t *field, void *dest);
-bool pb_dec_string(pb_istream_t *stream, const pb_field_t *field, void *dest);
-bool pb_dec_submessage(pb_istream_t *stream, const pb_field_t *field, void *dest);
-
-bool pb_skip_varint(pb_istream_t *stream);
-bool pb_skip_string(pb_istream_t *stream);
-#endif
 
 #ifdef __cplusplus
 } /* extern "C" */
