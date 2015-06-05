@@ -22,11 +22,12 @@ bool os_read(pb_istream_t *stream, uint8_t *buf, size_t count) {
 
     while (count > 0) {
         std::cout << "os_read count is " << count << std::endl;
-        if (s->available() > 0) {
-            std::cout << "stream available is: " << s->available() << std::endl;
-            size_t readCount = s->readBytes((char *)buf, count);
-            count -= readCount;
+        if(s->available() < 1) {
+          return false;
         }
+        std::cout << "stream available is: " << s->available() << std::endl;
+        size_t readCount = s->readBytes((char *)buf, count);
+        count -= readCount;
     }
     return true;
 }
