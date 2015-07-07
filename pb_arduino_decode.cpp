@@ -4,7 +4,18 @@
  */
 
 #include "pb_arduino_decode.h"
+
+// Make library cross-compatiable
+// with Arduino, GNU C++ for tests, and Spark.
+#if defined(ARDUINO) && ARDUINO >= 100
 #include "Arduino.h"
+#include "Stream.h"
+#elif defined(SPARK)
+#include "application.h"
+#include "spark_wiring_stream.h"
+#endif
+
+
 bool os_read(pb_istream_t *stream, uint8_t *buf, size_t count);
 
 void pb_istream_from_stream(Stream &stream, pb_istream_t &istream) {
