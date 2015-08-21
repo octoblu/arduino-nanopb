@@ -27,6 +27,7 @@ linkExternalProject(arduino-nanopb "gmock")
 linkExternalProject(arduino-nanopb "arduino-mock")
 
 option(test "Build all tests." OFF)
+add_definitions(-DARDUINO=101)
 
 if (test)
   enable_testing()
